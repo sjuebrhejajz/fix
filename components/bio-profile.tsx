@@ -10,6 +10,7 @@ import {
   Code,
   Bug,
   Flame,
+  Angry,
   BadgeCheck,
   Gavel,
 } from 'lucide-react'
@@ -25,7 +26,7 @@ const BADGES = [
   { icon: Code, label: 'Developer' },
   { icon: Bug, label: 'Bug Bounty' },
   { icon: Flame, label: 'Hated by Guns.lol' },
-  { icon: Flame, label: 'Hated by Fakecrime.bio' },
+  { icon: Angry, label: 'Hated by Fakecrime.bio' },
   { icon: BadgeCheck, label: 'Verified' },
   { icon: Gavel, label: 'Rule Maker' },
 ]
