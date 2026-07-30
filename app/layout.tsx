@@ -13,10 +13,12 @@ const jetbrainsMono = JetBrains_Mono({
   variable: '--font-mono',
 })
 
+const SITE_URL = 'https://uncertain.uk'
+
 export const metadata: Metadata = {
-  title: 'JAQLIV',
-  description: 'JAQLIV — personal profile',
-  generator: 'v0.app',
+  metadataBase: new URL(SITE_URL),
+  title: 'insanity',
+  description: 'click to enter.',
   icons: {
     icon: [
       {
@@ -33,6 +35,26 @@ export const metadata: Metadata = {
       },
     ],
     apple: '/apple-icon.png',
+  },
+  openGraph: {
+    title: 'insanity',
+    description: 'click to enter.',
+    url: SITE_URL,
+    siteName: 'insanity',
+    images: [
+      {
+        url: '/images/avatar.jpg',
+        width: 512,
+        height: 512,
+      },
+    ],
+    type: 'profile',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'insanity',
+    description: 'click to enter.',
+    images: ['/images/avatar.jpg'],
   },
 }
 
