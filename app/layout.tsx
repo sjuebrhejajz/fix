@@ -14,11 +14,12 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 const SITE_URL = 'https://uncertain.uk'
+const SITE_DESCRIPTION = 'Portals to files.uncertain.uk and convert.uncertain.uk.'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: 'insanity',
-  description: 'click to enter.',
+  title: 'uncertain.uk',
+  description: SITE_DESCRIPTION,
   icons: {
     icon: [
       { url: '/icon-light-32x32.png', media: '(prefers-color-scheme: light)' },
@@ -28,24 +29,16 @@ export const metadata: Metadata = {
     apple: '/apple-icon.png',
   },
   openGraph: {
-    title: 'insanity',
-    description: 'click to enter.',
+    title: 'uncertain.uk',
+    description: SITE_DESCRIPTION,
     url: SITE_URL,
-    siteName: 'insanity',
-    images: [
-      {
-        url: '/images/avatar.jpg',
-        width: 512,
-        height: 512,
-      },
-    ],
-    type: 'profile',
+    siteName: 'uncertain.uk',
+    type: 'website',
   },
   twitter: {
-    card: 'summary_large_image',
-    title: 'insanity',
-    description: 'click to enter.',
-    images: ['/images/avatar.jpg'],
+    card: 'summary',
+    title: 'uncertain.uk',
+    description: SITE_DESCRIPTION,
   },
 }
 
