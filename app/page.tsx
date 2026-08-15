@@ -1,3 +1,11 @@
+'use client'
+
+// This must be a client component: PORTALS below holds actual icon
+// component references (FolderOpen, Video), and passing a raw function
+// reference as a prop from a Server Component into a Client Component
+// (PortalLink) isn't allowed — only serializable data can cross that
+// boundary. This page does no server-only work (no data fetching), so
+// there's no downside to it being fully client-rendered.
 import { FolderOpen, Video } from 'lucide-react'
 import { PortalLink } from '@/components/portal-link'
 import { AnalyticsLogger } from '@/components/analytics-logger'
