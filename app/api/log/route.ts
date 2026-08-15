@@ -10,8 +10,6 @@ const COLORS: Record<string, number> = {
   time_on_page: 0xf59e0b, // amber
 }
 
-const MAX_FIELD_VALUE = 1000 // Discord's own embed field limit is 1024
-
 // Explicit allowlist rather than comparing against request.nextUrl.origin —
 // that value reflects whatever Vercel's edge/proxy layer reports internally,
 // which doesn't reliably match the public domain a browser is actually on
@@ -26,15 +24,65 @@ const ALLOWED_ORIGINS = new Set<string>([
 function isSameSiteRequest(req: NextRequest): boolean {
   const origin = req.headers.get("origin")
   const referer = req.headers.get("referer")
-  // A real page load always sends one of these. Someone curling the
-  // endpoint directly, or a basic script, usually sends neither — so
-  // treating "neither header present" as a fail (unlike a normal browser
-  // navigation, where that's normal and allowed) is the right call
-  // specifically for this route, since it's only ever meant to be called
-  // by JS already running on the page, not via direct navigation.
   if (origin) return ALLOWED_ORIGINS.has(origin)
   if (referer) return [...ALLOWED_ORIGINS].some((o) => referer.startsWith(o))
   return false
+}
+
+// SECURITY: this is the actual fix for the real incident — this route used
+// to take whatever field names/values were in the request body and reflect
+// them straight into a Discord embed with only a generic 1000-char cap per
+// value. That meant anyone who could reach this endpoint (bypassing the
+// origin check some other way, e.g. by spoofing headers) could put
+// arbitrary text — including a paragraph-long threatening message dressed
+// up as a "user_agent" field — directly into the channel. Every field below
+// is now validated against a known shape for its event type; anything
+// unrecognized, wrong-typed, or malformed is silently dropped rather than
+// forwarded. Free-text-ish fields (referrer, user_agent) still allow
+// arbitrary content by nature, but are capped far shorter than before
+// (200 chars, not 1000) — long enough for any real value, short enough that
+// this stops being a useful place to paste a monologue.
+const SCHEMAS: Record<string, Record<string, { maxLen: number; pattern?: RegExp }>> = {
+  page_view: {
+    path: { maxLen: 200 },
+    referrer: { maxLen: 200 },
+    user_agent: { maxLen: 200 },
+    language: { maxLen: 35, pattern: /^[A-Za-z0-9-]+$/ },
+    timezone: { maxLen: 60, pattern: /^[A-Za-z0-9_+\-/]+$/ },
+    screen: { maxLen: 20, pattern: /^\d{1,5}x\d{1,5}$/ },
+    viewport: { maxLen: 20, pattern: /^\d{1,5}x\d{1,5}$/ },
+    pixel_ratio: { maxLen: 10, pattern: /^\d+(\.\d+)?$/ },
+    cpu_cores: { maxLen: 10, pattern: /^(\d+|unknown)$/ },
+    device_memory_gb: { maxLen: 10, pattern: /^(\d+(\.\d+)?|unknown)$/ },
+    connection_type: { maxLen: 20, pattern: /^[a-z0-9]+$/i },
+    downlink_mbps: { maxLen: 10, pattern: /^(\d+(\.\d+)?|unknown)$/ },
+    ttfb_ms: { maxLen: 10, pattern: /^(\d+|unknown)$/ },
+    dom_load_ms: { maxLen: 10, pattern: /^(\d+|unknown)$/ },
+    page_load_ms: { maxLen: 10, pattern: /^(\d+|unknown)$/ },
+  },
+  click: {
+    portal: { maxLen: 60 },
+    path: { maxLen: 200 },
+  },
+  time_on_page: {
+    path: { maxLen: 200 },
+    seconds: { maxLen: 10, pattern: /^\d+$/ },
+  },
+}
+
+function sanitizeData(type: string, data: Record<string, unknown>): Record<string, string> {
+  const schema = SCHEMAS[type]
+  if (!schema) return {}
+
+  const clean: Record<string, string> = {}
+  for (const [key, spec] of Object.entries(schema)) {
+    const raw = data[key]
+    if (raw === undefined || raw === null || raw === "") continue
+    const str = String(raw).slice(0, spec.maxLen)
+    if (spec.pattern && !spec.pattern.test(str)) continue
+    clean[key] = str
+  }
+  return clean
 }
 
 export async function POST(req: NextRequest) {
@@ -45,24 +93,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
 
-    // Railway/Vercel both set x-forwarded-for; fall back to a shared bucket
-    // if it's ever missing so the limiter still does something.
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
 
-    // Tightened from 20/min: real page activity is one page_view, one
-    // time_on_page, and at most a couple of clicks — comfortably under 10.
     if (!rateLimit(`log:${ip}`, 10, 60_000)) {
       return NextResponse.json({ ok: false }, { status: 429 })
     }
-    // Backstop against a flood spread across many different IPs — see
-    // lib/rate-limit.ts for what this does and doesn't actually guarantee.
     if (!globalRateLimit(60, 60_000)) {
       return NextResponse.json({ ok: false }, { status: 429 })
     }
 
     const body = await req.json().catch(() => null)
     const type = typeof body?.type === "string" ? body.type : "unknown"
-    const data = body?.data && typeof body.data === "object" ? body.data : {}
+
+    // Only these three event types exist — anything else is either a bug on
+    // our own end (shouldn't happen) or someone probing the endpoint.
+    if (!SCHEMAS[type]) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
+
+    const rawData = body?.data && typeof body.data === "object" ? body.data : {}
+    const data = sanitizeData(type, rawData)
 
     if (type === "click" && typeof data.portal === "string") {
       try {
@@ -74,19 +124,14 @@ export async function POST(req: NextRequest) {
 
     const webhookUrl = process.env.DISCORD_WEBHOOK_URL
     if (!webhookUrl) {
-      // Not configured — fail silently rather than erroring the page for
-      // visitors just because analytics logging isn't set up yet.
       return NextResponse.json({ ok: true })
     }
 
-    const fields = Object.entries(data)
-      .filter(([, v]) => v !== undefined && v !== null && v !== "")
-      .slice(0, 25) // Discord's own field-count limit per embed
-      .map(([key, value]) => ({
-        name: key,
-        value: String(value).slice(0, MAX_FIELD_VALUE),
-        inline: true,
-      }))
+    const fields = Object.entries(data).map(([key, value]) => ({
+      name: key,
+      value,
+      inline: true,
+    }))
 
     const embed = {
       title: `uncertain.uk — ${type}`,
@@ -96,9 +141,6 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
     }
 
-    // Fire-and-forget from the caller's perspective — don't let a slow or
-    // failing Discord webhook add latency to the visitor's page. Errors are
-    // logged server-side only, never surfaced to the client.
     fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -108,8 +150,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error("[api/log]", err)
-    // Still 200 — a broken analytics pipe should never look like a broken
-    // site to whoever (or whatever) is calling this.
     return NextResponse.json({ ok: true })
   }
 }
