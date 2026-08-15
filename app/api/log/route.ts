@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { rateLimit } from "@/lib/rate-limit"
+import { rateLimit, globalRateLimit } from "@/lib/rate-limit"
+import { incrementClick } from "@/lib/db/clicks"
 
 // Discord's own embed color values (decimal, not hex string) — one per event
 // type just to make scanning the channel visually easier at a glance.
@@ -17,11 +18,27 @@ export async function POST(req: NextRequest) {
     // if it's ever missing so the limiter still does something.
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
 
-    // 20 events per minute per visitor is generous for real page activity
-    // (one page_view, one time_on_page, and a couple of clicks) while still
-    // stopping a script from flooding the webhook past Discord's own limit.
-    if (!rateLimit(`log:${ip}`, 20, 60_000)) {
+    // Tightened from 20/min: real page activity is one page_view, one
+    // time_on_page, and at most a couple of clicks — comfortably under 10.
+    if (!rateLimit(`log:${ip}`, 10, 60_000)) {
       return NextResponse.json({ ok: false }, { status: 429 })
+    }
+    // Backstop against a flood spread across many different IPs — see
+    // lib/rate-limit.ts for what this does and doesn't actually guarantee.
+    if (!globalRateLimit(60, 60_000)) {
+      return NextResponse.json({ ok: false }, { status: 429 })
+    }
+
+    const body = await req.json().catch(() => null)
+    const type = typeof body?.type === "string" ? body.type : "unknown"
+    const data = body?.data && typeof body.data === "object" ? body.data : {}
+
+    if (type === "click" && typeof data.portal === "string") {
+      try {
+        await incrementClick(data.portal)
+      } catch (err) {
+        console.error("[api/log] click count update failed:", err)
+      }
     }
 
     const webhookUrl = process.env.DISCORD_WEBHOOK_URL
@@ -30,10 +47,6 @@ export async function POST(req: NextRequest) {
       // visitors just because analytics logging isn't set up yet.
       return NextResponse.json({ ok: true })
     }
-
-    const body = await req.json().catch(() => null)
-    const type = typeof body?.type === "string" ? body.type : "unknown"
-    const data = body?.data && typeof body.data === "object" ? body.data : {}
 
     const fields = Object.entries(data)
       .filter(([, v]) => v !== undefined && v !== null && v !== "")
